@@ -36,7 +36,10 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.DialogFragment
 import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import lyi.linyi.posemon.camera.CameraSource
 import lyi.linyi.posemon.data.Device
@@ -44,6 +47,7 @@ import lyi.linyi.posemon.data.Camera
 import lyi.linyi.posemon.ml.ModelType
 import lyi.linyi.posemon.ml.MoveNet
 import lyi.linyi.posemon.ml.PoseClassifier
+
 
 class MainActivity : AppCompatActivity() {
     companion object {
@@ -60,9 +64,11 @@ class MainActivity : AppCompatActivity() {
 
     /** 定义几个计数器 */
     private var forwardheadCounter = 0
-    private var crosslegCounter = 0
+    private var phoneCounter = 0
     private var standardCounter = 0
     private var missingCounter = 0
+    private var waterCounter = 0
+    private var standCounter = 0
 
     /** 定义一个历史姿态寄存器 */
     private var poseRegister = "standard"
@@ -80,6 +86,16 @@ class MainActivity : AppCompatActivity() {
 
     private var cameraSource: CameraSource? = null
     private var isClassifyPose = true
+
+    lateinit var waterPlayer: MediaPlayer
+    lateinit var standPlayer: MediaPlayer
+    var lastWaterPostureDetectedTime: Long = 0
+    var lastStandPostureDetectedTime: Long = 0
+    var postureDetectionStarted = false
+    var duration: Long = 6000 * 20
+
+    private var waterTimerJob: Job? = null
+    private var standTimerJob: Job? = null
 
     private val requestPermissionLauncher =
         registerForActivityResult(
@@ -166,12 +182,22 @@ class MainActivity : AppCompatActivity() {
 
     private fun openCamera() {
         /** 音频播放 */
-        val crosslegPlayer = MediaPlayer.create(this, R.raw.crossleg)
+        val phonePlayer = MediaPlayer.create(this, R.raw.phone)
         val forwardheadPlayer = MediaPlayer.create(this, R.raw.forwardhead)
         val standardPlayer = MediaPlayer.create(this, R.raw.standard)
-        var crosslegPlayerFlag = true
+        waterPlayer = MediaPlayer.create(this, R.raw.water)
+        standPlayer = MediaPlayer.create(this, R.raw.standup)
+        var phonePlayerFlag = true
         var forwardheadPlayerFlag = true
         var standardPlayerFlag = true
+
+        // Set the last posture detected time to current time
+        lastWaterPostureDetectedTime = System.currentTimeMillis()
+        lastStandPostureDetectedTime = System.currentTimeMillis()
+        postureDetectionStarted = true
+        resetWaterPostureTimer(duration)
+        resetStandPostureTimer(duration)
+
 
         if (isCameraPermissionGranted()) {
             if (cameraSource == null) {
@@ -195,9 +221,51 @@ class MainActivity : AppCompatActivity() {
                                 missingCounter = 0
                                 val sortedLabels = poseLabels.sortedByDescending { it.second }
                                 when (sortedLabels[0].first) {
-                                    "forwardhead" -> {
-                                        crosslegCounter = 0
+                                    "water" -> {
+                                        phoneCounter = 0
                                         standardCounter = 0
+                                        forwardheadCounter = 0
+                                        standCounter = 0
+                                        if (poseRegister == "water") {
+                                            waterCounter++
+                                        }
+                                        poseRegister = "water"
+
+                                        if (waterCounter > 30) {
+                                            lastWaterPostureDetectedTime = System.currentTimeMillis()
+                                            ivStatus.setImageResource(R.drawable.water)
+                                            resetWaterPostureTimer(duration)
+                                            waterCounter = 0
+                                        }
+
+                                        /** 显示 Debug 信息 */
+                                        tvDebug.text = getString(R.string.tfe_pe_tv_debug, "${sortedLabels[0].first} $waterCounter")
+                                    }
+                                    "stand" -> {
+                                        phoneCounter = 0
+                                        standardCounter = 0
+                                        forwardheadCounter = 0
+                                        waterCounter = 0
+                                        if (poseRegister == "stand") {
+                                            waterCounter++
+                                        }
+                                        poseRegister = "stand"
+
+                                        if (waterCounter > 60) {
+                                            lastWaterPostureDetectedTime = System.currentTimeMillis()
+                                            ivStatus.setImageResource(R.drawable.stand)
+                                            resetStandPostureTimer(duration)
+                                            standCounter = 0
+                                        }
+
+                                        /** 显示 Debug 信息 */
+                                        tvDebug.text = getString(R.string.tfe_pe_tv_debug, "${sortedLabels[0].first} $waterCounter")
+                                    }
+                                    "forwardhead" -> {
+                                        phoneCounter = 0
+                                        standardCounter = 0
+                                        waterCounter = 0
+                                        standCounter = 0
                                         if (poseRegister == "forwardhead") {
                                             forwardheadCounter++
                                         }
@@ -211,8 +279,8 @@ class MainActivity : AppCompatActivity() {
                                                 forwardheadPlayer.start()
                                             }
                                             standardPlayerFlag = true
-                                            crosslegPlayerFlag = true
-                                            forwardheadPlayerFlag = false
+                                            phonePlayerFlag = true
+                                            forwardheadPlayerFlag = true
 
                                             ivStatus.setImageResource(R.drawable.forwardhead_confirm)
                                         } else if (forwardheadCounter > 30) {
@@ -225,32 +293,35 @@ class MainActivity : AppCompatActivity() {
                                     "crossleg" -> {
                                         forwardheadCounter = 0
                                         standardCounter = 0
-                                        if (poseRegister == "crossleg") {
-                                            crosslegCounter++
+                                        waterCounter = 0
+                                        standCounter = 0
+                                        if (poseRegister == "phone") {
+                                            phoneCounter++
                                         }
-                                        poseRegister = "crossleg"
-
-                                        /** 显示当前坐姿状态：翘二郎腿 */
-                                        if (crosslegCounter > 60) {
+                                        poseRegister = "phone"
+                                        
+                                        if (phoneCounter > 60) {
 
                                             /** 播放提示音 */
-                                            if (crosslegPlayerFlag) {
-                                                crosslegPlayer.start()
+                                            if (phonePlayerFlag) {
+                                                phonePlayer.start()
                                             }
                                             standardPlayerFlag = true
-                                            crosslegPlayerFlag = false
+                                            phonePlayerFlag = false
                                             forwardheadPlayerFlag = true
-                                            ivStatus.setImageResource(R.drawable.crossleg_confirm)
-                                        } else if (crosslegCounter > 30) {
-                                            ivStatus.setImageResource(R.drawable.crossleg_suspect)
+                                            ivStatus.setImageResource(R.drawable.phone_confirm)
+                                        } else if (phoneCounter > 30) {
+                                            ivStatus.setImageResource(R.drawable.phone_suspect)
                                         }
 
                                         /** 显示 Debug 信息 */
-                                        tvDebug.text = getString(R.string.tfe_pe_tv_debug, "${sortedLabels[0].first} $crosslegCounter")
+                                        tvDebug.text = getString(R.string.tfe_pe_tv_debug, "${sortedLabels[0].first} $phoneCounter")
                                     }
                                     else -> {
                                         forwardheadCounter = 0
-                                        crosslegCounter = 0
+                                        phoneCounter = 0
+                                        waterCounter = 0
+                                        standCounter = 0
                                         if (poseRegister == "standard") {
                                             standardCounter++
                                         }
@@ -264,7 +335,7 @@ class MainActivity : AppCompatActivity() {
                                                 standardPlayer.start()
                                             }
                                             standardPlayerFlag = false
-                                            crosslegPlayerFlag = true
+                                            phonePlayerFlag = true
                                             forwardheadPlayerFlag = true
 
                                             ivStatus.setImageResource(R.drawable.standard)
@@ -298,6 +369,43 @@ class MainActivity : AppCompatActivity() {
             createPoseEstimator()
         }
     }
+
+    private fun resetWaterPostureTimer(duration: Long) {
+        waterTimerJob?.cancel()
+
+        // Start a new coroutine to continuously check for the event
+        waterTimerJob = CoroutineScope(Dispatchers.IO).launch {
+        while (true) {
+                delay(duration) // Check every hour
+                // Check if an hour has passed since the last posture was detected
+                if (System.currentTimeMillis() - lastWaterPostureDetectedTime >= duration) {
+                    playPostureAlert(waterPlayer)
+                }
+            }
+        }
+    }
+
+    private fun resetStandPostureTimer(duration: Long) {
+        standTimerJob?.cancel()
+
+        // Start a new coroutine to continuously check for the event
+        standTimerJob = CoroutineScope(Dispatchers.IO).launch {
+            while (true) {
+                delay(duration) // Check every hour
+                // Check if an hour has passed since the last posture was detected
+                if (System.currentTimeMillis() - lastStandPostureDetectedTime >= duration) {
+                    playPostureAlert(standPlayer)
+                }
+            }
+        }
+    }
+
+    private fun playPostureAlert(player: MediaPlayer) {
+        if (!player.isPlaying) {
+            player.start()
+        }
+    }
+
 
     private fun isPoseClassifier() {
         cameraSource?.setClassifier(if (isClassifyPose) PoseClassifier.create(this) else null)
